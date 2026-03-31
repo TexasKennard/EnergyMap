@@ -1,0 +1,103 @@
+{
+  "app_name": "EIA Energy Asset Downloader",
+  "state_boundaries": {
+    "label": "U.S. state boundaries",
+    "layer_url": "https://services2.arcgis.com/FiaPA4ga0iQKduv3/ArcGIS/rest/services/TIGERweb_States_v1/FeatureServer/0",
+    "state_name_field": "NAME",
+    "state_abbr_field": "STUSAB",
+    "page_size": 1,
+    "description": "EIA-hosted TIGERweb states layer used for server-side polygon clipping."
+  },
+  "assets": {
+    "power_plants": {
+      "label": "Power plants",
+      "category": "Electricity",
+      "layer_url": "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/Power_Plants_in_the_US/FeatureServer/0",
+      "page_size": 1000,
+      "default_where": "1=1",
+      "supports_geojson": true,
+      "description": "Operable electric generating plants by energy source in the United States."
+    },
+    "electric_transmission_lines": {
+      "label": "Electric transmission lines",
+      "category": "Electricity",
+      "layer_url": "https://services2.arcgis.com/FiaPA4ga0iQKduv3/ArcGIS/rest/services/US_Electric_Power_Transmission_Lines/FeatureServer/0",
+      "page_size": 2000,
+      "default_where": "1=1",
+      "supports_geojson": true,
+      "description": "Electric power transmission lines in the United States."
+    },
+    "petroleum_refineries": {
+      "label": "Petroleum refineries",
+      "category": "Oil and liquids",
+      "layer_url": "https://services2.arcgis.com/FiaPA4ga0iQKduv3/ArcGIS/rest/services/Petroleum_Refineries_in_the_US/FeatureServer/0",
+      "page_size": 1000,
+      "default_where": "1=1",
+      "supports_geojson": true,
+      "description": "Petroleum refineries in the United States."
+    },
+    "natural_gas_pipelines": {
+      "label": "Natural gas interstate and intrastate pipelines",
+      "category": "Natural gas",
+      "layer_url": "https://arcgis.netl.doe.gov/server/rest/services/Hosted/EIA_pipeline_data/FeatureServer/3",
+      "page_size": 2000,
+      "default_where": "1=1",
+      "supports_geojson": true,
+      "description": "Natural gas interstate and intrastate pipelines from the NETL-hosted EIA pipeline service."
+    },
+    "crude_oil_pipelines": {
+      "label": "Crude oil trunk pipelines",
+      "category": "Oil and liquids",
+      "layer_url": "https://arcgis.netl.doe.gov/server/rest/services/Hosted/EIA_pipeline_data/FeatureServer/2",
+      "page_size": 2000,
+      "default_where": "1=1",
+      "supports_geojson": true,
+      "description": "Crude oil trunk pipelines from the NETL-hosted EIA pipeline service."
+    },
+    "petroleum_product_pipelines": {
+      "label": "Petroleum product pipelines",
+      "category": "Oil and liquids",
+      "layer_url": "https://arcgis.netl.doe.gov/server/rest/services/Hosted/EIA_pipeline_data/FeatureServer/1",
+      "page_size": 2000,
+      "default_where": "1=1",
+      "supports_geojson": true,
+      "description": "Petroleum products pipelines from the NETL-hosted EIA pipeline service."
+    },
+    "hgl_pipelines": {
+      "label": "Hydrocarbon gas liquids pipelines",
+      "category": "Oil and liquids",
+      "layer_url": "https://arcgis.netl.doe.gov/server/rest/services/Hosted/EIA_pipeline_data/FeatureServer/0",
+      "page_size": 2000,
+      "default_where": "1=1",
+      "supports_geojson": true,
+      "description": "Hydrocarbon gas liquids pipelines from the NETL-hosted EIA pipeline service."
+    },
+    "natural_gas_underground_storage": {
+      "label": "Natural gas underground storage",
+      "category": "Natural gas",
+      "layer_url": "https://services2.arcgis.com/ZOdjAzAQ2B0f85zi/ArcGIS/rest/services/NaturalGas_UndergroundStorage_US_EIA/FeatureServer/0",
+      "page_size": 2000,
+      "default_where": "1=1",
+      "supports_geojson": true,
+      "description": "Underground natural gas storage facilities in the United States."
+    },
+    "petroleum_product_terminals": {
+      "label": "Petroleum product terminals",
+      "category": "Oil and liquids",
+      "layer_url": "https://services8.arcgis.com/XLNdV9JX2tH1BT1x/ArcGIS/rest/services/PetroleumProduct_Terminals_US_EIA/FeatureServer/14",
+      "page_size": 2000,
+      "default_where": "1=1",
+      "supports_geojson": true,
+      "description": "Petroleum product terminals in the United States."
+    },
+    "lng_import_export_terminals": {
+      "label": "LNG import and export terminals",
+      "category": "Natural gas",
+      "layer_url": "https://services2.arcgis.com/wdQEqhSQSuYA89VW/ArcGIS/rest/services/Lng_ImportExportTerminals_US_EIA/FeatureServer/0",
+      "page_size": 1000,
+      "default_where": "1=1",
+      "supports_geojson": true,
+      "description": "LNG import and export terminals in the United States."
+    }
+  }
+}
