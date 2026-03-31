@@ -1,17 +1,13 @@
 # EIA Energy Asset Downloader
 
-This Streamlit app lets a user:
+This revised Streamlit app addresses the main causes of local UI lockups in the first version.
 
-1. choose a U.S. state,
-2. choose a single energy infrastructure layer,
-3. generate the backend selection manifest as JSON, and
-4. download the state-clipped asset layer as GeoJSON.
+## What changed
 
-## Files
-
-- `app.py` — Streamlit UI plus backend query logic.
-- `asset_registry.json` — external registry of ArcGIS layer endpoints.
-- `requirements.txt` — minimal Python dependencies.
+1. The selection manifest is compact and no longer embeds the full state polygon.
+2. The backend uses POST for ArcGIS queries that include geometry, which avoids oversized URLs.
+3. The download output is compressed as `.geojson.gz` instead of rendering or storing a large pretty-printed GeoJSON string.
+4. Large in-memory download state is cleared whenever the user changes the state, asset, or SQL filter.
 
 ## Run
 
@@ -20,24 +16,6 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## How it works
+## Common cause of the original freeze
 
-The backend does three things:
-
-1. queries the state boundary layer for the chosen state polygon,
-2. builds an ArcGIS `query` payload for the chosen asset layer, and
-3. paginates through the result set and emits GeoJSON.
-
-The `asset_registry.json` file is the extension point. To add another dataset, add another object under `assets` with:
-
-- `label`
-- `category`
-- `layer_url`
-- `page_size`
-- `default_where`
-- `supports_geojson`
-- `description`
-
-## Caveat
-
-This app depends on the upstream ArcGIS `FeatureServer` layers remaining public and queryable.
+The first version rendered a large manifest on every rerun and included both the full polygon geometry and a massive URL-encoded preview URL. Large states such as Texas and Michigan could therefore make the app appear unresponsive even before the full asset download finished.

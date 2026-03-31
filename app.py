@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
 
 import requests
 import streamlit as st
@@ -11,7 +11,9 @@ import streamlit as st
 APP_DIR = Path(__file__).resolve().parent
 REGISTRY_PATH = APP_DIR / "asset_registry.json"
 REQUEST_TIMEOUT = 120
-USER_AGENT = "eia-energy-asset-downloader/0.1"
+USER_AGENT = "eia-energy-asset-downloader/0.2"
+POST_THRESHOLD_CHARS = 1800
+LARGE_DOWNLOAD_THRESHOLD = 25000
 
 STATES = [
     ("Alabama", "AL"),
@@ -74,9 +76,25 @@ class BackendError(RuntimeError):
     """Raised when an upstream ArcGIS query fails."""
 
 
+def _normalize_params(params: dict[str, Any]) -> dict[str, Any]:
+    normalized = params.copy()
+    geometry = normalized.get("geometry")
+    if isinstance(geometry, dict):
+        normalized["geometry"] = json.dumps(geometry, separators=(",", ":"))
+    return normalized
+
+
 def _request_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
     headers = {"User-Agent": USER_AGENT}
-    response = requests.get(url, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
+    normalized = _normalize_params(params)
+    serialized_length = sum(len(str(k)) + len(str(v)) for k, v in normalized.items())
+    use_post = "geometry" in normalized or serialized_length > POST_THRESHOLD_CHARS
+
+    if use_post:
+        response = requests.post(url, data=normalized, headers=headers, timeout=REQUEST_TIMEOUT)
+    else:
+        response = requests.get(url, params=normalized, headers=headers, timeout=REQUEST_TIMEOUT)
+
     response.raise_for_status()
     payload = response.json()
 
@@ -121,7 +139,7 @@ def fetch_state_geometry(states_layer_url: str, state_name: str) -> tuple[dict[s
     return geometry, attributes
 
 
-def build_manifest(
+def build_selection_manifest(
     *,
     state_name: str,
     asset_key: str,
@@ -130,10 +148,54 @@ def build_manifest(
 ) -> dict[str, Any]:
     asset = registry["assets"][asset_key]
     state_layer = registry["state_boundaries"]
-    geometry, state_attributes = fetch_state_geometry(state_layer["layer_url"], state_name)
+    state_abbr = STATE_ABBR.get(state_name, "")
 
-    query_params: dict[str, Any] = {
-        "where": custom_where or asset.get("default_where", "1=1"),
+    return {
+        "selection": {
+            "state_name": state_name,
+            "state_abbr": state_abbr,
+            "asset_key": asset_key,
+            "asset_label": asset["label"],
+            "asset_category": asset.get("category", ""),
+        },
+        "state_lookup": {
+            "layer_url": state_layer["layer_url"],
+            "where": f"NAME = '{state_name.replace("'", "''")}'",
+            "fields": {
+                "state_name_field": state_layer.get("state_name_field", "NAME"),
+                "state_abbr_field": state_layer.get("state_abbr_field", "STUSAB"),
+            },
+        },
+        "asset_query": {
+            "layer_url": asset["layer_url"],
+            "query_url": f"{asset['layer_url'].rstrip('/')}/query",
+            "where": custom_where or asset.get("default_where", "1=1"),
+            "geometry_source": "fetch state polygon at runtime from state_lookup",
+            "geometry_type": "esriGeometryPolygon",
+            "spatial_relation": "esriSpatialRelIntersects",
+            "out_fields": "*",
+            "return_geometry": True,
+            "out_sr": 4326,
+            "result_format": "geojson" if asset.get("supports_geojson", True) else "json",
+            "page_size": asset.get("page_size", 1000),
+            "request_method": "POST preferred when geometry is present",
+        },
+        "asset_metadata": {
+            "description": asset.get("description", ""),
+            "default_where": asset.get("default_where", "1=1"),
+        },
+    }
+
+
+def build_runtime_query(manifest: dict[str, Any], registry: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    state_name = manifest["selection"]["state_name"]
+    state_layer_url = manifest["state_lookup"]["layer_url"]
+    geometry, state_attributes = fetch_state_geometry(state_layer_url, state_name)
+    asset_key = manifest["selection"]["asset_key"]
+    asset = registry["assets"][asset_key]
+
+    params: dict[str, Any] = {
+        "where": manifest["asset_query"]["where"],
         "geometry": geometry,
         "geometryType": "esriGeometryPolygon",
         "inSR": 4326,
@@ -145,52 +207,11 @@ def build_manifest(
         "resultOffset": 0,
         "resultRecordCount": asset.get("page_size", 1000),
     }
-
-    query_url = f"{asset['layer_url'].rstrip('/')}/query"
-
-    request_preview_params = query_params.copy()
-    request_preview_params["geometry"] = json.dumps(geometry, separators=(",", ":"))
-    request_preview_url = f"{query_url}?{urlencode(request_preview_params)}"
-
-    return {
-        "selection": {
-            "state_name": state_name,
-            "state_abbr": state_attributes.get("STUSAB", STATE_ABBR.get(state_name, "")),
-            "asset_key": asset_key,
-            "asset_label": asset["label"],
-            "asset_category": asset.get("category", ""),
-        },
-        "state_lookup": {
-            "layer_url": state_layer["layer_url"],
-            "where": f"NAME = '{state_name.replace("'", "''")}'",
-            "attributes": state_attributes,
-        },
-        "asset_query": {
-            "layer_url": asset["layer_url"],
-            "query_url": query_url,
-            "params": query_params,
-            "request_preview_url": request_preview_url,
-            "page_size": asset.get("page_size", 1000),
-            "supports_geojson": asset.get("supports_geojson", True),
-        },
-        "asset_metadata": {
-            "description": asset.get("description", ""),
-            "default_where": asset.get("default_where", "1=1"),
-        },
-    }
+    return params, state_attributes
 
 
-def _serialized_query_params(params: dict[str, Any]) -> dict[str, Any]:
-    serialized = params.copy()
-    geometry = serialized.get("geometry")
-    if isinstance(geometry, dict):
-        serialized["geometry"] = json.dumps(geometry, separators=(",", ":"))
-    return serialized
-
-
-def estimate_count(manifest: dict[str, Any]) -> int:
-    query = manifest["asset_query"]
-    params = query["params"].copy()
+def estimate_count(manifest: dict[str, Any], registry: dict[str, Any]) -> int:
+    params, _ = build_runtime_query(manifest, registry)
     params.update({
         "returnCountOnly": "true",
         "returnGeometry": "false",
@@ -198,27 +219,31 @@ def estimate_count(manifest: dict[str, Any]) -> int:
     })
     params.pop("resultOffset", None)
     params.pop("resultRecordCount", None)
-    payload = _request_json(query["query_url"], _serialized_query_params(params))
+
+    query_url = manifest["asset_query"]["query_url"]
+    payload = _request_json(query_url, params)
     count = payload.get("count")
     if count is None:
         raise BackendError("Count query succeeded but no count was returned.")
     return int(count)
 
 
-def fetch_geojson(manifest: dict[str, Any]) -> dict[str, Any]:
-    query = manifest["asset_query"]
-    page_size = int(query.get("page_size", 1000))
+def fetch_geojson(manifest: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any]:
+    params, state_attributes = build_runtime_query(manifest, registry)
+    query_url = manifest["asset_query"]["query_url"]
+    page_size = int(manifest["asset_query"].get("page_size", 1000))
+
     offset = 0
     combined: dict[str, Any] | None = None
     total_features = 0
 
     while True:
-        params = query["params"].copy()
-        params["resultOffset"] = offset
-        params["resultRecordCount"] = page_size
-        params["f"] = "geojson"
+        page_params = params.copy()
+        page_params["resultOffset"] = offset
+        page_params["resultRecordCount"] = page_size
+        page_params["f"] = "geojson"
 
-        payload = _request_json(query["query_url"], _serialized_query_params(params))
+        payload = _request_json(query_url, page_params)
         features = payload.get("features", [])
         if combined is None:
             combined = payload
@@ -233,14 +258,13 @@ def fetch_geojson(manifest: dict[str, Any]) -> dict[str, Any]:
     if combined is None:
         combined = {"type": "FeatureCollection", "features": []}
 
-    combined.setdefault(
-        "metadata",
-        {
-            "state": manifest["selection"]["state_name"],
-            "asset": manifest["selection"]["asset_label"],
-            "record_count": total_features,
-        },
-    )
+    combined["metadata"] = {
+        "state": manifest["selection"]["state_name"],
+        "state_abbr": state_attributes.get("STUSAB", manifest["selection"]["state_abbr"]),
+        "asset": manifest["selection"]["asset_label"],
+        "asset_key": manifest["selection"]["asset_key"],
+        "record_count": total_features,
+    }
     return combined
 
 
@@ -249,14 +273,21 @@ def make_filename(state_name: str, asset_key: str, suffix: str) -> str:
     return f"{safe_state}_{asset_key}.{suffix}"
 
 
+def reset_download_state() -> None:
+    st.session_state.pop("geojson_gz_bytes", None)
+    st.session_state.pop("geojson_gz_filename", None)
+    st.session_state.pop("last_selection_key", None)
+    st.session_state.pop("estimated_count", None)
+
+
 def main() -> None:
     st.set_page_config(page_title="EIA Energy Asset Downloader", layout="wide")
     registry = load_registry()
 
     st.title(registry.get("app_name", "EIA Energy Asset Downloader"))
     st.write(
-        "Select a state and a single infrastructure layer. The app builds the ArcGIS query manifest, "
-        "clips the selected layer to the state polygon on the server side, and prepares GeoJSON for download."
+        "Select a state and a single infrastructure layer. The app builds a compact JSON selection manifest, "
+        "then fetches the state polygon at runtime and queries the selected ArcGIS layer using a POST request when needed."
     )
 
     asset_keys = list(registry["assets"].keys())
@@ -281,16 +312,17 @@ def main() -> None:
         )
         st.caption(asset.get("description", ""))
 
-    try:
-        manifest = build_manifest(
-            state_name=state_name,
-            asset_key=asset_key,
-            custom_where=custom_where,
-            registry=registry,
-        )
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Failed to build the selection manifest: {exc}")
-        return
+    selection_key = f"{state_name}|{asset_key}|{custom_where}"
+    if st.session_state.get("last_selection_key") != selection_key:
+        reset_download_state()
+        st.session_state["last_selection_key"] = selection_key
+
+    manifest = build_selection_manifest(
+        state_name=state_name,
+        asset_key=asset_key,
+        custom_where=custom_where,
+        registry=registry,
+    )
 
     manifest_json = json.dumps(manifest, indent=2)
     st.subheader("Selection manifest")
@@ -307,41 +339,53 @@ def main() -> None:
         if st.button("Estimate matching record count"):
             try:
                 with st.spinner("Estimating record count..."):
-                    count = estimate_count(manifest)
+                    count = estimate_count(manifest, registry)
+                st.session_state["estimated_count"] = count
                 st.success(f"Estimated records: {count:,}")
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Count query failed: {exc}")
 
+    estimated_count = st.session_state.get("estimated_count")
+    if isinstance(estimated_count, int) and estimated_count > LARGE_DOWNLOAD_THRESHOLD:
+        st.warning(
+            f"This selection is large ({estimated_count:,} records). A local download can still be slow or memory-intensive. "
+            "Add a SQL filter if you want a smaller extract."
+        )
+
     with col_fetch:
-        if st.button("Fetch data and prepare GeoJSON"):
+        if st.button("Fetch data and prepare compressed GeoJSON"):
             try:
                 with st.spinner("Downloading paginated GeoJSON..."):
-                    geojson = fetch_geojson(manifest)
-                st.session_state["geojson_text"] = json.dumps(geojson, indent=2)
-                st.session_state["geojson_filename"] = make_filename(state_name, asset_key, "geojson")
+                    geojson = fetch_geojson(manifest, registry)
+                geojson_bytes = json.dumps(geojson, separators=(",", ":")).encode("utf-8")
+                gz_bytes = gzip.compress(geojson_bytes)
+                st.session_state["geojson_gz_bytes"] = gz_bytes
+                st.session_state["geojson_gz_filename"] = make_filename(state_name, asset_key, "geojson.gz")
                 st.success(
-                    f"Prepared {len(geojson.get('features', [])):,} features for download."
+                    f"Prepared {len(geojson.get('features', [])):,} features for download. "
+                    f"Compressed size: {len(gz_bytes) / (1024 * 1024):.2f} MB"
                 )
             except Exception as exc:  # noqa: BLE001
                 st.error(f"GeoJSON download failed: {exc}")
 
-    geojson_text = st.session_state.get("geojson_text")
-    geojson_filename = st.session_state.get("geojson_filename")
-    if geojson_text and geojson_filename:
-        st.subheader("GeoJSON download")
+    geojson_gz_bytes = st.session_state.get("geojson_gz_bytes")
+    geojson_gz_filename = st.session_state.get("geojson_gz_filename")
+    if geojson_gz_bytes and geojson_gz_filename:
+        st.subheader("Compressed GeoJSON download")
         st.download_button(
-            label="Download clipped asset data (.geojson)",
-            data=geojson_text,
-            file_name=geojson_filename,
-            mime="application/geo+json",
+            label="Download clipped asset data (.geojson.gz)",
+            data=geojson_gz_bytes,
+            file_name=geojson_gz_filename,
+            mime="application/gzip",
         )
 
     with st.expander("Notes"):
         st.markdown(
             "- The asset registry is externalized in `asset_registry.json`, so you can add more layers without changing the UI.\n"
-            "- The backend uses the EIA-hosted state boundary layer to obtain polygon geometry, then sends that geometry to the selected asset layer using `esriSpatialRelIntersects`.\n"
-            "- For large layers, the backend paginates with `resultOffset` and `resultRecordCount`.\n"
-            "- The app assumes the selected layers continue to expose public `Query` operations."
+            "- The JSON manifest is intentionally compact and does not embed the full state polygon.\n"
+            "- The backend fetches the state polygon at runtime and uses `esriSpatialRelIntersects` against the selected asset layer.\n"
+            "- ArcGIS requests that include geometry are sent with POST rather than GET to avoid oversized URLs.\n"
+            "- Download output is compressed as `.geojson.gz` to reduce browser and process memory pressure."
         )
 
 
